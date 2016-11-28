@@ -26,20 +26,26 @@ class Database:
             print "Connection already present"
         return True
 
+    # Rollback the current transaction so that we can proceed with other
+    # transactions
     def Reset(self):
         if self.connection_:
             self.connection_.rollback()
 
+    # Close up the transaction and cursor
     def Close(self):
         if self.cur_:
             self.cur_.close()
         if self.connection_:
             self.connection_.close()
 
+    # Return all user's that match the search. Should only be at most one,
+    # since the username is a primary key
     def SearchForUser(self, username):
         self.cur_.execute("SELECT * FROM Users WHERE username = '%s'" % username)
         return self.cur_.fetchall()
 
+    # Add a user to the Users table, as long as they don't already exist
     def AddNewUser(self, username):
         try:
             self.cur_.execute("INSERT INTO Users (username, onlineStatus,\
@@ -56,8 +62,14 @@ class Database:
             self.Reset()
             return "Error"
 
+    # Check to see if the users are already friends. If not, add the request
+    # to the friend request list
     def SendFriendRequest(self, sending_user, receiving_user):
         try:
+            self.cur_.execute("SELECT * FROM FriendsList WHERE username='%s'\
+                     AND friend='%s';" % (sending_user, receiving_user))
+            if self.cur_.fetchall():
+                return "Already Friends"
             self.cur_.execute("INSERT INTO FriendRequests (from_user, to_user)\
                     values ('%s', '%s');" % (sending_user, receiving_user))
             self.connection_.commit()
@@ -73,3 +85,37 @@ class Database:
         except:
             self.Reset()
             return "Error"
+
+    # If the requests exists, delete it from the request list, and add the
+    # sending_user to the receiving_user's friend list, and visa versa
+    def AcceptFriendRequest(self, sending_user, receiving_user):
+        try:
+            self.cur_.execute("SELECT * FROM FriendRequests WHERE from_user='%s'\
+                     AND to_user='%s';" % (sending_user, receiving_user))
+            if not self.cur_.fetchall():
+                return "No request to accept"
+            self.cur_.execute("DELETE FROM FriendRequests WHERE from_user='%s'\
+                     AND to_user='%s';" % (sending_user, receiving_user))
+            # Don't think there should be reverse relation, but if there is,
+            # definitely don't want it there anymore
+            self.cur_.execute("DELETE FROM FriendRequests WHERE from_user='%s'\
+                     AND to_user='%s';" % (receiving_user, sending_user))
+            self.cur_.execute("INSERT INTO FriendsList (username, friend)\
+                    values ('%s', '%s');" % (sending_user, receiving_user))
+            self.cur_.execute("INSERT INTO FriendsList (username, friend)\
+                    values ('%s', '%s');" % (receiving_user, sending_user))
+            self.connection_.commit()
+        except:
+            self.Reset()
+            return 
+
+    def ViewFriendRequests(self, username):
+        self.cur_.execute("SELECT from_user FROM FriendRequests WHERE to_user='%s';" %
+                (username,))
+        return self.cur_.fetchall()
+
+    def ViewFriendsList(self, username):
+        self.cur_.execute("SELECT friend FROM FriendsList WHERE username='%s';" %
+                (username,))
+        return self.cur_.fetchall()
+
