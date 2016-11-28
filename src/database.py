@@ -10,9 +10,9 @@ class Database:
         self.password_ = password
         self.connection_ = None
         self.cur_ = None
-        self.Initialize()
+        self.Init()
 
-    def Initialize(self):
+    def Init(self):
         if (self.connection_ == None):
             try:
                 params = "dbname='%s' user='%s' host='%s' password='%s'" % \
@@ -28,8 +28,7 @@ class Database:
 
     def Reset(self):
         if self.connection_:
-            self.connection_.cancel()
-            self.cur_ = self.connection_.cursor()
+            self.connection_.rollback()
 
     def Close(self):
         if self.cur_:
@@ -38,17 +37,21 @@ class Database:
             self.connection_.close()
 
     def SearchForUser(self, username):
-        self.cur_.execute("SELECT * FROM Users WHERE username = %s" % username)
+        self.cur_.execute("SELECT * FROM Users WHERE username = '%s'" % username)
         return self.cur_.fetchall()
 
     def AddNewUser(self, username):
         try:
             self.cur_.execute("INSERT INTO Users (username, onlineStatus,\
                         inGameStatus) values ('%s', True, False);" % username)
+            self.connection_.commit()
             return "Success"
         except psycopg2.IntegrityError as e:
             self.Reset()
-            return "Duplicate"
+            if "already exists" in e.message:
+                return "Duplicate"
+            else:
+                return "Error"
         except:
             self.Reset()
             return "Error"
@@ -57,11 +60,16 @@ class Database:
         try:
             self.cur_.execute("INSERT INTO FriendRequests (from_user, to_user)\
                     values ('%s', '%s');" % (sending_user, receiving_user))
+            self.connection_.commit()
             return "Success"
         except psycopg2.IntegrityError as e:
             self.Reset()
-            return "Duplicate"
+            if "already exists" in e.message:
+                return "Duplicate"
+            elif "is not present" in e.message:
+                return "Invalid User"
+            else:
+                return "Error"
         except:
             self.Reset()
             return "Error"
-
