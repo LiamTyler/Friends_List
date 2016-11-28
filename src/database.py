@@ -12,6 +12,8 @@ class Database:
         self.cur_ = None
         self.Init()
 
+
+
     # Connect to the database
     def Init(self):
         if (self.connection_ != None):
@@ -43,8 +45,7 @@ class Database:
     # since the username is a primary key
     def SearchForUser(self, username):
         try:
-            self.cur_.execute("SELECT * FROM Users WHERE username = '%s'" % username)
-            return self.cur_.fetchall()
+            return self._SearchUser(username)
         except:
             self.Reset()
             return "Error"
@@ -52,9 +53,7 @@ class Database:
     # Add a user to the Users table, as long as they don't already exist
     def AddNewUser(self, username):
         try:
-            self.cur_.execute("INSERT INTO Users (username, onlineStatus,\
-                        inGameStatus) values ('%s', True, False);" % username)
-            self.connection_.commit()
+            self._InsertUser(username, True)
             return "Success"
         except psycopg2.IntegrityError as e:
             self.Reset()
@@ -66,27 +65,28 @@ class Database:
             self.Reset()
             return "Error"
 
+    def RemoveUser(self, username):
+        try:
+            self._DeleteUser(username, True)
+            return "Success"
+        except:
+            self.Reset()
+            return "Error"
+
     # Check to see if the users are already friends. If not, add the request
     # to the friend request list
     def SendFriendRequest(self, sending_user, receiving_user):
         try:
-            self.cur_.execute("SELECT * FROM FriendsList WHERE username='%s'\
-                     AND friend='%s';" % (sending_user, receiving_user))
-            if self.cur_.fetchall():
+            if self._SearchFriendsList(sending_user, receiving_user):
                 return "Already Friends"
-            # If the receiving user already sent a friend request to the
-            # now sending user, instead of sending the request, just make them
-            # friends in each other's friends list
-            self.cur_.execute("SELECT * FROM FriendRequests WHERE from_user =\
-                    '%s' AND to_user = '%s';" % (receiving_user, sending_user))
-            if self.cur_.fetchall():
-                self.AcceptFriendRequest(sending_user, receiving_user)
+
+            # If the sending user already got a request from the recipient,
+            # just add them to each others friend list and remove request
+            if self._SearchRequest(sending_user, receiving_user):
+                return self.AcceptFriendRequest(sending_user, receiving_user)
             else:
-                self.cur_.execute("INSERT INTO FriendRequests (from_user,\
-                        to_user) values ('%s', '%s');" % (sending_user,
-                         receiving_user))
-                self.connection_.commit()
-            return "Success"
+                self._InsertRequest(sending_user, receiving_user, True)
+                return "Success"
         except psycopg2.IntegrityError as e:
             self.Reset()
             if "already exists" in e.message:
@@ -103,15 +103,9 @@ class Database:
     # sending_user to the receiving_user's friend list, and visa versa
     def AcceptFriendRequest(self, sending_user, receiving_user):
         try:
-            self.cur_.execute("DELETE FROM FriendRequests WHERE from_user='%s'\
-                     AND to_user='%s';" % (sending_user, receiving_user))
-            self.cur_.execute("DELETE FROM FriendRequests WHERE from_user='%s'\
-                     AND to_user='%s';" % (receiving_user, sending_user))
-            self.cur_.execute("INSERT INTO FriendsList (username, friend)\
-                    values ('%s', '%s');" % (sending_user, receiving_user))
-            self.cur_.execute("INSERT INTO FriendsList (username, friend)\
-                    values ('%s', '%s');" % (receiving_user, sending_user))
-            self.connection_.commit()
+            self._DeleteRequest(sending_user, receiving_user)
+            self._InsertFriend(sending_user, receiving_user)
+            self._InsertFriend(receiving_user, sending_user, True)
             return "Success"
         except:
             self.Reset()
@@ -121,9 +115,7 @@ class Database:
     # by the receiving_user
     def RejectFriendRequest(self, sending_user, receiving_user):
         try:
-            self.cur_.execute("DELETE FROM FriendRequests WHERE from_user='%s'\
-                     AND to_user='%s';" % (sending_user, receiving_user))
-            self.connection_.commit()
+            self._DeleteRequest(sending_user, receiving_user, True)
             return "Success"
         except:
             self.Reset()
@@ -131,40 +123,22 @@ class Database:
 
     def ViewFriendRequests(self, username):
         try:
-            self.cur_.execute("SELECT from_user FROM FriendRequests WHERE to_user='%s';" %
-                    (username,))
-            return self.cur_.fetchall()
+            return self._SearchRequests(username)
         except:
             self.Reset()
             return "Error"
 
     def ViewFriendsList(self, username):
         try:
-            self.cur_.execute("SELECT friend FROM FriendsList WHERE username=\
-                    '%s';" % username)
-            return self.cur_.fetchall()
+            return self._SearchFriendsList(username)
         except:
             self.Reset()
             return "Error"
 
     def RemoveFriend(self, username, friend):
         try:
-            self.cur_.execute("DELETE FROM FriendsList WHERE username='%s' AND\
-                    friend='%s';" % (username, friend))
-            # Remove the reverse too
-            self.cur_.execute("DELETE FROM FriendsList WHERE username='%s' AND\
-                    friend='%s';" % (friend, username))
-            self.connection_.commit()
-            return "Success"
-        except:
-            self.Reset()
-            return "Error"
-
-    def RemoveUser(self, username):
-        try:
-            self.cur_.execute("DELETE FROM Users WHERE username='%s';" %
-                              username)
-            self.connection_.commit()
+            self._DeleteFriend(username, friend)
+            self._DeleteFriend(friend, username, True)
             return "Success"
         except:
             self.Reset()
@@ -189,3 +163,93 @@ class Database:
         except:
             self.Reset()
             return "Error"
+
+    ########################### HELPER FUNCTIONS ##############################
+    #
+    # Summary: All these functions below merely execute the SQL on each of the
+    #          3 tables. These are just so that the above code where the logic
+    #          actually resides is uncluttered and easier to understand
+    #
+    ###########################################################################
+
+    def _SearchUser(self, username):
+        SQL = "SELECT * FROM Users WHERE username = (%s);"
+        data = (username,)
+        self.cur_.execute(SQL, data)
+        return self.cur_.fetchall()
+
+    def _InsertUser(self, username, onlineStatus=True,
+                    inGameStatus=False, save=False):
+        SQL = "INSERT INTO Users (username, onlineStatus, inGameStatus) \
+               values ((%s), (%s), (%s));"
+        data = (username, onlineStatus, inGameStatus)
+        self.cur_.execute(SQL, data)
+        if save:
+            self.connection_.commit()
+
+    def _DeleteUser(self, username, save=False):
+        SQL = "DELETE FROM Users WHERE username = (%s);"
+        data = (username,)
+        self.cur_.execute(SQL, data)
+        if save:
+            self.connection_.commit()
+    
+    def _SearchRequest(self, receiving_user=None, sending_user=None):
+        if not sending_user and not receiving_user:
+            return []
+        elif not sending_user:
+            SQL = "SELECT from_user FROM FriendRequests WHERE to_user = (%s);"
+            data = (receiving_user,)
+        elif not receiving_user:
+            SQL = "SELECT to_user FROM FriendRequests WHERE from_user = (%s);"
+            data = (sending_user,)
+        else:
+            SQL = "SELECT * FROM FriendRequests WHERE from_user = (%s) AND \
+                    to_user = (%s);"
+            data = (sending_user, receiving_user)
+
+        self.cur_.execute(SQL, data)
+        return self.cur_.fetchall()
+
+    def _InsertRequest(self, sending_user, receiving_user, save=False):
+        SQL = "INSERT INTO FriendRequests (from_user, to_user) \
+               values ((%s), (%s));"
+        data = (sending_user, receiving_user)
+        self.cur_.execute(SQL, data)
+        if save:
+            self.connection_.commit()
+
+    def _DeleteRequest(self, sending_user, receiving_user, save=False):
+        SQL = "DELETE FROM FriendRequests WHERE from_user = (%s) \
+                AND to_user = (%s);"
+        data = (sending_user, receiving_user)
+        self.cur_.execute(SQL, data)
+        if save:
+            self.connection_.commit()
+
+    def _SearchFriendsList(self, username, friend=None):
+        if not friend:
+            SQL = "SELECT friend FROM FriendsList WHERE username = (%s);"
+            data = (username,)
+        else:
+            SQL = "SELECT * FROM FriendsList WHERE username = (%s) AND \
+                    friend = (%s);"
+            data = (username, friend)
+        self.cur_.execute(SQL, data)
+        return self.cur_.fetchall()
+
+    def _InsertFriend(self, username, friend, save=False):
+        SQL = "INSERT INTO FriendsList (username, friend) values ((%s), (%s));"
+        data = (username, friend)
+        self.cur_.execute(SQL, data)
+        if save:
+            self.connection_.commit()
+
+    def _DeleteFriend(self, username, friend, save=False):
+        SQL = "DELETE FROM FriendsList WHERE username = (%s) \
+                AND friend = (%s);"
+        data = (username, friend)
+        self.cur_.execute(SQL, data)
+        if save:
+            self.connection_.commit()
+
