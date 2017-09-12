@@ -119,6 +119,7 @@ class Controller:
                         valid_choice = True
                 else:
                     print "Invalid choice. Please try again."
+
             print "Logged in and in main menu"
             running = False
 
